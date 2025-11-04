@@ -19,11 +19,28 @@
 
 #include "row_convert.h"
 
+// global flag to control scaling algorithm for testing
+static int g_scaling_algorithm = 0;
+
+void set_scaling_algorithm(int alg) { g_scaling_algorithm = alg; }
+int get_scaling_algorithm() { return g_scaling_algorithm; }
+
 void GRAY8_to_GRAY8_row(uint8_t* dst, const uint8_t* src1, const uint8_t* src2,
                         uint32_t d_width, uint32_t ratio) {
   uint32_t i;
   uint32_t start = (ratio - 2) / 2;
   uint32_t interval = ratio;
+
+  // Nearest variant: pick single sample (clear difference for testing)
+  if (g_scaling_algorithm == 1) {
+    src1 += start;
+    for (i = 0; i < d_width; i++) {
+      dst[0] = src1[0];
+      src1 += interval;
+      dst += 1;
+    }
+    return;
+  }
 
   src1 += start;
   src2 += start;
@@ -46,6 +63,18 @@ void GRAYA88_to_GRAYA88_row(uint8_t* dst, const uint8_t* src1,
   uint32_t i;
   uint32_t start = (ratio - 2) / 2 * 2;
   uint32_t interval = ratio * 2;
+
+  // Nearest variant: pick single sample (upper-left) for both channels
+  if (g_scaling_algorithm == 1) {
+    src1 += start;
+    for (i = 0; i < d_width; i++) {
+      dst[0] = src1[0];
+      dst[1] = src1[1];
+      src1 += interval;
+      dst += 2;
+    }
+    return;
+  }
 
   src1 += start;
   src2 += start;
@@ -71,6 +100,20 @@ void RGBA8888_to_RGBA8888_row_internal_2(uint8_t* dst, const uint8_t* src1,
   uint32_t i;
   uint32_t start = (ratio - 2) / 2 * 4;
   uint32_t interval = ratio * 4;
+
+  // Nearest variant: pick upper-left pixel only for each output (no averaging)
+  if (g_scaling_algorithm == 1) {
+    src1 += start;
+    for (i = 0; i < d_width; i++) {
+      dst[0] = src1[0];
+      dst[1] = src1[1];
+      dst[2] = src1[2];
+      dst[3] = src1[3];
+      src1 += interval;
+      dst += 4;
+    }
+    return;
+  }
 
   src1 += start;
   src2 += start;

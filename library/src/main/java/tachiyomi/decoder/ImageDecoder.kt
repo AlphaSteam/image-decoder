@@ -11,7 +11,7 @@ import kotlin.concurrent.write
 class ImageDecoder private constructor(
   private val nativePtr: Long,
   val width: Int,
-  val height: Int
+  val height: Int,
 ) {
 
   var isRecycled = false
@@ -33,7 +33,7 @@ class ImageDecoder private constructor(
       }
       nativeDecode(
         nativePtr, sampleSize, region.left, region.top, region.width(),
-        region.height()
+        region.height(),
       )
     } finally {
       val currentDecoding = decoding.decrementAndGet()

@@ -1,12 +1,13 @@
 plugins {
-    id 'com.android.library'
-    id 'kotlin-android'
+    alias(libs.plugins.android.library)
+    alias(libs.plugins.kotlin.android)
     id 'maven-publish'
 }
 
 group = 'tachiyomiorg'
 
 android {
+    namespace "tachiyomi.decoder"
     compileSdkVersion 33
     ndkVersion "26.2.11394342"
 

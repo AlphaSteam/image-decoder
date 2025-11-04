@@ -32,4 +32,9 @@ void GRAYA88_to_GRAYA88_row(uint8_t* dst, const uint8_t* src1,
                             const uint8_t* src2, uint32_t d_width,
                             uint32_t ratio);
 
+// For testing: allow runtime selection of a simple scaling algorithm variant.
+// 0 = default (current 2x2 box average), 1 = nearest (pick single sample)
+void set_scaling_algorithm(int alg);
+int get_scaling_algorithm();
+
 #endif // IMAGE_IMAGE_CONVERT_H
