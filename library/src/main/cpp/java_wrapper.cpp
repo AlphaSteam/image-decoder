@@ -98,8 +98,7 @@ Java_tachiyomi_decoder_ImageDecoder_nativeDecode(JNIEnv* env, jobject,
                                                  jlong decoderPtr,
                                                  jint sampleSize, jint x,
                                                  jint y, jint width,
-                                                 jint height,
-                                                 jint scalingAlgorithm) {
+                                                 jint height) {
   auto* decoder = (BaseDecoder*)decoderPtr;
 
   // Bounds of the image when crop borders is enabled, otherwise it matches the
@@ -135,9 +134,6 @@ Java_tachiyomi_decoder_ImageDecoder_nativeDecode(JNIEnv* env, jobject,
     std::vector<uint8_t> out_buffer(outRect.width * outRect.height * 4);
     uint8_t* pout_buffer = out_buffer.data();
 
-  // Set the runtime scaling algorithm (testing hook) so row conversion
-  // functions can vary behavior based on the requested algorithm.
-  set_scaling_algorithm(scalingAlgorithm);
   decoder->decode(pout_buffer, outRect, inRect, sampleSize);
 
     if (decoder->useTransform) {
@@ -163,6 +159,12 @@ Java_tachiyomi_decoder_ImageDecoder_nativeDecode(JNIEnv* env, jobject,
 
   AndroidBitmap_unlockPixels(env, bitmap);
   return bitmap;
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_tachiyomi_decoder_ImageDecoder_nativeSetScalingAlgorithm(JNIEnv* env, jclass,
+                                                              jint alg) {
+  set_scaling_algorithm(alg);
 }
 
 extern "C" JNIEXPORT void JNICALL

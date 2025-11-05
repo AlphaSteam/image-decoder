@@ -11,6 +11,10 @@ android {
     compileSdkVersion 33
     ndkVersion "26.2.11394342"
 
+    publishing {
+        singleVariant("release") {}
+    }
+
     defaultConfig {
         minSdkVersion 21
         targetSdkVersion 30

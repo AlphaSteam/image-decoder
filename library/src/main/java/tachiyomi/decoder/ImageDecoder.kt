@@ -117,6 +117,14 @@ class ImageDecoder private constructor(
     ) : ImageDecoder?
 
     @JvmStatic
+    private external fun nativeSetScalingAlgorithm(alg: Int)
+
+    @JvmStatic
+    fun setNativeScalingAlgorithm(alg: Int) {
+      nativeSetScalingAlgorithm(alg)
+    }
+
+    @JvmStatic
     private external fun nativeFindType(bytes: ByteArray): ImageType?
 
     @JvmStatic
