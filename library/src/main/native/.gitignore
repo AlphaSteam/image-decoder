@@ -1,0 +1,5 @@
+/*.pc
+/conan*.sh
+/conan_meson_cross.ini
+/deactivate_conan*.sh
+/build/

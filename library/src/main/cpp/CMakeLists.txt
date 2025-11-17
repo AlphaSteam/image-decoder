@@ -19,6 +19,10 @@ add_library(imagedecoder SHARED
   row_convert.cpp
 )
 
+add_library(vipswrapper SHARED
+  vips_wrapper.cpp
+)
+
 # Change the default path of fetch content to avoid downloading the same dependencies per architecture
 get_filename_component(deps "../_deps" REALPATH BASE_DIR "${CMAKE_BINARY_DIR}")
 set(FETCHCONTENT_BASE_DIR ${deps})
@@ -52,3 +56,5 @@ if(WITH_JXL)
 endif()
 
 target_link_libraries(imagedecoder android jnigraphics log)
+
+target_link_libraries(vipswrapper log dl)

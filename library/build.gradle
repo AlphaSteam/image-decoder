@@ -1,7 +1,6 @@
 plugins {
-    alias(libs.plugins.android.library)
-    alias(libs.plugins.kotlin.android)
-    id 'maven-publish'
+    id 'com.android.library'
+    id 'kotlin-android'
 }
 
 group = 'tachiyomiorg'
@@ -11,10 +10,6 @@ android {
     compileSdkVersion 33
     ndkVersion "26.2.11394342"
 
-    publishing {
-        singleVariant("release") {}
-    }
-
     defaultConfig {
         minSdkVersion 21
         targetSdkVersion 30
@@ -22,8 +17,10 @@ android {
         versionName "1.0"
 
         consumerProguardFiles "consumer-rules.pro"
+
         externalNativeBuild {
             cmake {
+                targets "imagedecoder", "vipswrapper"
             }
         }
     }
@@ -34,34 +31,353 @@ android {
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
     }
+
     compileOptions {
-        sourceCompatibility JavaVersion.VERSION_1_8
-        targetCompatibility JavaVersion.VERSION_1_8
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
     }
     kotlinOptions {
-        jvmTarget = '1.8'
+        kotlin {
+            jvmToolchain(17)
+        }
     }
+
     externalNativeBuild {
         cmake {
             path file('src/main/cpp/CMakeLists.txt')
             version '3.22.1+'
         }
     }
+
+    publishing {
+        singleVariant "release"
+    }
 }
 
-dependencies {
+// ABIs and versions
+def vipsAbis   = ["arm64-v8a"]
+def vipsVersion = "8.15.2"
+def minApi      = 24
+
+// Let Gradle package generated .so
+android.sourceSets.main.jniLibs.srcDirs += ["build/vips-libs"]
+
+// Ensure ABI filters include the ones we build
+android.defaultConfig.ndk {
+    //noinspection ChromeOsAbiSupport
+    abiFilters += vipsAbis
+}
+
+// Helpers
+def ndkHostTag = { ->
+    File prebuilt = new File(android.ndkDirectory, "toolchains/llvm/prebuilt")
+    def opts = ["darwin-arm64","darwin-x86_64","linux-x86_64","windows-x86_64"]
+    def found = opts.find { new File(prebuilt, it).isDirectory() }
+    if (!found) throw new GradleException("No supported NDK prebuilt host found in ${prebuilt}")
+    return found
+}
+def norm = { String p -> p.replace('\\','/') }
+
+def hostTag = ndkHostTag()
+def toolBin = file("${android.ndkDirectory}/toolchains/llvm/prebuilt/${hostTag}/bin")
+def sysroot = file("${android.ndkDirectory}/toolchains/llvm/prebuilt/${hostTag}/sysroot").absolutePath
+def pkgconfName = hostTag.startsWith("windows") ? "pkgconf.exe" : "pkgconf"
+def hostPkgConfig = [
+        "/opt/homebrew/bin/pkg-config",
+        "/usr/local/bin/pkg-config",
+        "/usr/bin/pkg-config"
+].collect { file(it) }.find { it.exists() }?.absolutePath ?: "pkg-config"
+def copySharedLib = { File source, File dest ->
+    java.nio.file.Files.copy(
+            source.toPath(),
+            dest.toPath(),
+            java.nio.file.StandardCopyOption.REPLACE_EXISTING
+    )
+}
+
+def nativeBuildRoot = file("${projectDir}/src/main/native/build")
+def vipsRoot   = nativeBuildRoot
+def vipsLibRoot = layout.buildDirectory.dir("vips-libs").get().asFile
+def conanFile  = file("src/main/native/conanfile.py")
+def libiconvRecipeDir = file("src/main/native/conan/recipes/libiconv")
+def libiconvExportStamp = layout.buildDirectory.file("vips-build/libiconv-export.stamp")
+def glibRecipeDir = file("src/main/native/conan/recipes/glib")
+def glibExportStamp = layout.buildDirectory.file("vips-build/glib-export.stamp")
+def libgettextRecipeDir = file("src/main/native/conan/recipes/libgettext")
+def libgettextExportStamp = layout.buildDirectory.file("vips-build/libgettext-export.stamp")
+
+def withPkgEnv = { Exec execTask, File pkgDir, File pkgWrapper = null ->
+    def buildPcDir = new File(pkgDir, "build-pc")
+
+    def existing = System.getenv("PKG_CONFIG_PATH")
+    def targetPath = pkgDir.absolutePath
+    def combined = buildPcDir.exists() ? "${buildPcDir.absolutePath}${File.pathSeparator}${targetPath}" : targetPath
+    if (existing) {
+        combined = "${combined}${File.pathSeparator}${existing}"
+    }
+    execTask.environment("PKG_CONFIG_PATH", combined)
+    execTask.environment("PKG_CONFIG_SYSROOT_DIR", "")
+    def existingBuildPath = System.getenv("PKG_CONFIG_PATH_FOR_BUILD")
+    if (buildPcDir.exists()) {
+        def buildValue = existingBuildPath ?
+                "${buildPcDir.absolutePath}${File.pathSeparator}${existingBuildPath}" :
+                buildPcDir.absolutePath
+        execTask.environment("PKG_CONFIG_PATH_FOR_BUILD", buildValue)
+    } else if (existingBuildPath) {
+        execTask.environment("PKG_CONFIG_PATH_FOR_BUILD", existingBuildPath)
+    }
+    execTask.environment("PKG_CONFIG_SYSROOT_DIR_FOR_BUILD", "")
+    execTask.environment("PKG_CONFIG_FOR_BUILD", hostPkgConfig)
+    if (pkgWrapper != null) {
+        execTask.environment("PKG_CONFIG", pkgWrapper.absolutePath)
+    }
+}
+
+def exportLibiconvRecipe = tasks.register("vipsExportLibiconvRecipe") {
+    onlyIf { new File(libiconvRecipeDir, "conanfile.py").exists() }
+    inputs.dir(libiconvRecipeDir)
+    outputs.file(libiconvExportStamp)
+    doLast {
+        def stampFile = libiconvExportStamp.get().asFile
+        stampFile.parentFile.mkdirs()
+        exec {
+            workingDir libiconvRecipeDir
+            commandLine "conan", "export", ".", "--name=libiconv", "--version=1.18"
+        }
+        stampFile.text = System.currentTimeMillis().toString()
+    }
+}
+
+def exportGlibRecipe = tasks.register("vipsExportGlibRecipe") {
+    onlyIf { new File(glibRecipeDir, "conanfile.py").exists() }
+    inputs.dir(glibRecipeDir)
+    outputs.file(glibExportStamp)
+    doLast {
+        def stampFile = glibExportStamp.get().asFile
+        stampFile.parentFile.mkdirs()
+        exec {
+            workingDir glibRecipeDir
+            commandLine "conan", "export", ".", "--name=glib", "--version=2.85.3"
+        }
+        stampFile.text = System.currentTimeMillis().toString()
+    }
+}
+
+def exportLibgettextRecipe = tasks.register("vipsExportLibgettextRecipe") {
+    onlyIf { new File(libgettextRecipeDir, "conanfile.py").exists() }
+    inputs.dir(libgettextRecipeDir)
+    outputs.file(libgettextExportStamp)
+    doLast {
+        def stampFile = libgettextExportStamp.get().asFile
+        stampFile.parentFile.mkdirs()
+        exec {
+            workingDir libgettextRecipeDir
+            commandLine "conan", "export", ".", "--name=libgettext", "--version=0.22"
+        }
+        stampFile.text = System.currentTimeMillis().toString()
+    }
+}
+
+vipsAbis.each { abi ->
+    def archTriplet = (abi == "arm64-v8a") ? "aarch64-linux-android${minApi}" : "x86_64-linux-android${minApi}"
+
+    def abiDir    = file("${vipsRoot}/${abi}")
+    def conanOutput = file("${abiDir}/conan")
+    def conanPcDir= conanOutput
+    def srcDir    = file("${abiDir}/libvips-src")
+    def buildDir  = file("${abiDir}/meson-build")
+    def stageDir  = file("${abiDir}/stage")
+    def outAbiDir = file("${vipsLibRoot}/${abi}")
+    def crossFile = file("${buildDir}/cross-${abi}.ini")
+    def pkgwrap   = file("${buildDir}/${hostTag.startsWith('windows') ? 'pkg-config.cmd' : 'pkg-config.sh'}")
+
+    tasks.register("vipsConan_${abi}", Exec) {
+        dependsOn exportLibiconvRecipe, exportGlibRecipe, exportLibgettextRecipe
+        workingDir abiDir
+        doFirst { abiDir.mkdirs(); conanOutput.mkdirs() }
+        commandLine "conan", "install", conanFile.absolutePath,
+                "-pr:h=default", "-pr:b=default",
+                "-s:h", "os=Android",
+                "-s:h", "os.api_level=${minApi}",
+                "-s:h", "arch=" + (abi == "arm64-v8a" ? "armv8" : "x86_64"),
+                "-s:h", "compiler=clang",
+                "-s:h", "compiler.version=17",
+                "-s:h", "compiler.libcxx=c++_shared",
+                "-s:h","build_type=Release",
+                "-c","tools.android:ndk_path=${android.ndkDirectory.absolutePath}",
+                "-c","tools.cmake.cmaketoolchain:generator=Ninja",
+                "-of", conanOutput.absolutePath,
+                "--build=libiconv", "--build=glib", "--build=missing"
+    }
+
+
+
+    tasks.register("vipsFetchSrc_${abi}") {
+        dependsOn "vipsConan_${abi}"
+        inputs.property("vipsVersion", vipsVersion)
+        outputs.dir(srcDir)
+        doLast {
+            def marker = new File(srcDir, "meson.build")
+            if (marker.exists()) return
+            srcDir.parentFile.mkdirs()
+            def tarball = new File(buildDir, "libvips-v${vipsVersion}.tar.gz")
+            ant.mkdir(dir: tarball.parentFile)
+            ant.get(src: "https://github.com/libvips/libvips/archive/refs/tags/v${vipsVersion}.tar.gz",
+                    dest: tarball,
+                    skipexisting: true)
+            if (srcDir.exists()) {
+                srcDir.deleteDir()
+            }
+            def archiveTree = project.tarTree(resources.gzip(tarball))
+            copy {
+                from archiveTree
+                into srcDir
+                includeEmptyDirs = false
+                eachFile { details ->
+                    def segments = details.relativePath.segments
+                    if (segments.length <= 1) {
+                        details.exclude()
+                    } else {
+                        details.relativePath = new org.gradle.api.file.RelativePath(details.isDirectory(), segments[1..-1] as String[])
+                    }
+                }
+            }
+            tarball.delete()
+        }
+    }
+
+    tasks.register("vipsGenPkgWrap_${abi}") {
+        dependsOn "vipsConan_${abi}"
+        doLast {
+            buildDir.mkdirs()
+            def candidates = [
+                    file("/opt/homebrew/bin/${pkgconfName}"),
+                    file("/usr/local/bin/${pkgconfName}"),
+                    file("/usr/bin/${pkgconfName}")
+            ]
+            def pkgconfPath = candidates.find { it.exists() }
+            if (!pkgconfPath) {
+                throw new GradleException("pkgconf not found. Install with: brew install pkgconf")
+            }
+            if (hostTag.startsWith("windows")) {
+                pkgwrap.text = """@echo off
+set PC_DIR=${conanPcDir.absolutePath}
+"${pkgconfPath.absolutePath}" --keep-system-cflags --keep-system-libs --with-path="%PC_DIR%" %*
+"""
+            } else {
+                pkgwrap.text = '''#!/usr/bin/env sh
+PC_DIR="''' + conanPcDir.absolutePath + '''"
+exec "''' + pkgconfPath.absolutePath + '''" --keep-system-cflags --keep-system-libs --with-path="$PC_DIR" "$@"
+'''
+                pkgwrap.setExecutable(true)
+            }
+        }
+    }
+
+    tasks.register("vipsGenCross_${abi}") {
+        dependsOn "vipsGenPkgWrap_${abi}", "vipsFetchSrc_${abi}"
+        doLast {
+            buildDir.mkdirs()
+            def cc   = file("${toolBin}/${archTriplet}-clang").absolutePath
+            def cxx  = file("${toolBin}/${archTriplet}-clang++").absolutePath
+            def ar   = file("${toolBin}/llvm-ar").absolutePath
+            def strip= file("${toolBin}/llvm-strip").absolutePath
+
+            crossFile.text = """
+[binaries]
+c = '${norm(cc)}'
+cpp = '${norm(cxx)}'
+ar = '${norm(ar)}'
+strip = '${norm(strip)}'
+pkg-config = '${norm(pkgwrap.absolutePath)}'
+
+[properties]
+needs_exe_wrapper = true
+
+[host_machine]
+system = 'android'
+cpu_family = '${abi == "arm64-v8a" ? "aarch64" : "x86_64"}'
+cpu = '${abi == "arm64-v8a" ? "armv8" : "x86_64"}'
+endian = 'little'
+""".stripIndent()
+        }
+    }
+
+    tasks.register("vipsMesonSetup_${abi}", Exec) { task ->
+        task.dependsOn "vipsGenCross_${abi}"
+        task.workingDir = buildDir
+        task.doFirst { buildDir.mkdirs(); stageDir.mkdirs() }
+        withPkgEnv(task, conanOutput, pkgwrap)
+        def pkgEnvCmd = "export PKG_CONFIG='${pkgwrap.absolutePath}'"
+        task.commandLine "bash", "-lc", ". '${conanOutput}/conanbuild.sh' && ${pkgEnvCmd} && meson setup '${buildDir.absolutePath}' '${srcDir.absolutePath}' " +
+                "--cross-file '${crossFile.absolutePath}' " +
+                "-Ddefault_library=shared " +
+                "-Dintrospection=disabled -Dgtk_doc=false -Ddeprecated=false -Dexamples=false " +
+                "-Dmodules=disabled -Dorc=disabled -Dfftw=disabled " +
+                "-Djpeg=disabled -Dpng=disabled -Dwebp=disabled -Dtiff=disabled -Dheif=disabled -Djpeg-xl=disabled"
+    }
+
+    tasks.register("vipsMesonBuild_${abi}", Exec) { task ->
+        task.dependsOn "vipsMesonSetup_${abi}"
+        task.workingDir = buildDir
+        withPkgEnv(task, conanOutput, pkgwrap)
+        def pkgEnvCmd = "export PKG_CONFIG='${pkgwrap.absolutePath}'"
+        task.commandLine "bash", "-lc", ". '${conanOutput}/conanbuild.sh' && ${pkgEnvCmd} && meson compile"
+    }
+
+    tasks.register("vipsMesonInstall_${abi}", Exec) { task ->
+        task.dependsOn "vipsMesonBuild_${abi}"
+        task.workingDir = buildDir
+        task.environment "DESTDIR", stageDir.absolutePath
+        withPkgEnv(task, conanOutput, pkgwrap)
+        def pkgEnvCmd = "export PKG_CONFIG='${pkgwrap.absolutePath}'"
+        task.commandLine "bash", "-lc", ". '${conanOutput}/conanbuild.sh' && ${pkgEnvCmd} && meson install"
+    }
+
+    tasks.register("vipsCollect_${abi}") {
+        dependsOn "vipsMesonInstall_${abi}"
+        doLast {
+            outAbiDir.mkdirs()
+            def libDir = file("${stageDir}/usr/local/lib")
+            libDir.listFiles(new FilenameFilter() {
+                boolean accept(File d, String name) { name.endsWith(".so") }
+            })?.each { f ->
+                def target = new File(outAbiDir, f.name)
+                copySharedLib(f, target)
+            }
+            // Ensure common deps are present
+            def needed = ["libvips.so","libglib-2.0.so","libgobject-2.0.so","libgmodule-2.0.so","libpcre2-8.so","libffi.so","libz.so"]
+            def have = (outAbiDir.list() ?: [] ) as Set
+            def missing = needed.findAll { !have.contains(it) }
+            if (!missing.isEmpty()) {
+                abiDir.eachFileRecurse { f ->
+                    if (f.isFile() && f.name.endsWith(".so") && missing.contains(f.name)) {
+                        def target = new File(outAbiDir, f.name)
+                        copySharedLib(f, target)
+                    }
+                }
+            }
+            def cxxShared = file("${android.ndkDirectory}/toolchains/llvm/prebuilt/${hostTag}/sysroot/usr/lib64/libc++_shared.so")
+            if (cxxShared.exists()) {
+                def target = new File(outAbiDir, "libc++_shared.so")
+                copySharedLib(cxxShared, target)
+            }
+        }
+    }
+}
+
+tasks.register("vipsBuildAll") {
+    dependsOn vipsAbis.collect { "vipsCollect_${it}" }
 }
 
 afterEvaluate {
-    publishing {
-        publications {
-            // Creates a Maven publication called "release".
-            release(MavenPublication) {
-                from components.release
-                groupId = 'tachiyomiorg'
-                artifactId = 'image-decoder'
-                version = '1.0'
-            }
-        }
+    tasks.matching { it.name.equalsIgnoreCase("preBuild") || it.name.endsWith("PreBuild") }
+            .configureEach { dependsOn "vipsBuildAll" }
+}
+
+tasks.named("clean").configure {
+    doLast {
+        if (nativeBuildRoot.exists()) nativeBuildRoot.deleteDir()
+        if (vipsLibRoot.exists()) vipsLibRoot.deleteDir()
     }
 }

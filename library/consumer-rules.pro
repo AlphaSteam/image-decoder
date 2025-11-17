@@ -3,3 +3,5 @@
 -keep class tachiyomi.decoder.ImageType { *; }
 -keep class tachiyomi.decoder.Format { *; }
 -keep class tachiyomi.decoder.Format$Companion { *; }
+-keep class tachiyomi.decoder.VipsWrapper { *; }
+-keep class tachiyomi.decoder.VipsResampler { *; }
