@@ -1,8 +1,18 @@
 package tachiyomi.decoder
 
 enum class ScalingAlgorithm(val code: Int){
+    ORIGINAL(code = -1),
     NEAREST_NEIGHBOR(code = 0),
-    BILINEAR(code = 1);
+    BILINEAR(code = 1),
+    BICUBIC(code = 2),
+    MITCHELL(code = 3),
+    LANCZOS2(code = 4),
+    LANCZOS3(code = 5),
+    LANCZOS4(code = 6),
+    NOHALO(code = 7),
+    VSHARP(code = 8),
+    VSQBS(code = 9);
+    
 
     companion object {
         private val codeMap = entries.associateBy { it.code }

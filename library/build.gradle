@@ -87,6 +87,14 @@ def hostPkgConfig = [
         "/usr/local/bin/pkg-config",
         "/usr/bin/pkg-config"
 ].collect { file(it) }.find { it.exists() }?.absolutePath ?: "pkg-config"
+
+def conanExecutable = (System.getenv("CONAN_CMD")?.trim())?.with { it } ?:
+        [
+                "/opt/homebrew/bin/conan",
+                "/usr/local/bin/conan",
+                "/usr/bin/conan"
+        ].collect { file(it) }.find { it.canExecute() }?.absolutePath ?: "conan"
+
 def copySharedLib = { File source, File dest ->
     java.nio.file.Files.copy(
             source.toPath(),
@@ -142,7 +150,7 @@ def exportLibiconvRecipe = tasks.register("vipsExportLibiconvRecipe") {
         stampFile.parentFile.mkdirs()
         exec {
             workingDir libiconvRecipeDir
-            commandLine "conan", "export", ".", "--name=libiconv", "--version=1.18"
+            commandLine conanExecutable, "export", ".", "--name=libiconv", "--version=1.18"
         }
         stampFile.text = System.currentTimeMillis().toString()
     }
@@ -157,7 +165,7 @@ def exportGlibRecipe = tasks.register("vipsExportGlibRecipe") {
         stampFile.parentFile.mkdirs()
         exec {
             workingDir glibRecipeDir
-            commandLine "conan", "export", ".", "--name=glib", "--version=2.85.3"
+            commandLine conanExecutable, "export", ".", "--name=glib", "--version=2.85.3"
         }
         stampFile.text = System.currentTimeMillis().toString()
     }
@@ -172,7 +180,7 @@ def exportLibgettextRecipe = tasks.register("vipsExportLibgettextRecipe") {
         stampFile.parentFile.mkdirs()
         exec {
             workingDir libgettextRecipeDir
-            commandLine "conan", "export", ".", "--name=libgettext", "--version=0.22"
+            commandLine conanExecutable, "export", ".", "--name=libgettext", "--version=0.22"
         }
         stampFile.text = System.currentTimeMillis().toString()
     }
@@ -195,7 +203,7 @@ vipsAbis.each { abi ->
         dependsOn exportLibiconvRecipe, exportGlibRecipe, exportLibgettextRecipe
         workingDir abiDir
         doFirst { abiDir.mkdirs(); conanOutput.mkdirs() }
-        commandLine "conan", "install", conanFile.absolutePath,
+        commandLine conanExecutable, "install", conanFile.absolutePath,
                 "-pr:h=default", "-pr:b=default",
                 "-s:h", "os=Android",
                 "-s:h", "os.api_level=${minApi}",
